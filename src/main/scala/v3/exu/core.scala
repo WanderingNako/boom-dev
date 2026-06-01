@@ -451,7 +451,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       rob.io.commit.arch_valids(w) && (
         rob.io.commit.uops(w).uopc === uopFMUL_S ||
         rob.io.commit.uops(w).uopc === uopFMUL_D
-      )).map(_.asUInt)
+      ))
   ))
 
   val committed_fadd = RegNext(PopCount(
@@ -461,7 +461,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         rob.io.commit.uops(w).uopc === uopFSUB_S ||
         rob.io.commit.uops(w).uopc === uopFADD_D ||
         rob.io.commit.uops(w).uopc === uopFSUB_D
-      )).map(_.asUInt)
+      ))
   ))
 
   val committed_fma = RegNext(PopCount(
@@ -474,8 +474,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         rob.io.commit.uops(w).uopc === uopFMADD_D ||
         rob.io.commit.uops(w).uopc === uopFMSUB_D ||
         rob.io.commit.uops(w).uopc === uopFNMADD_D ||
-        rob.io.commit.uops(w).uopc === uopFNMSUB_D ||
-      )).map(_.asUInt)
+        rob.io.commit.uops(w).uopc === uopFNMSUB_D
+      ))
   ))
 
   when (startCounter) {
