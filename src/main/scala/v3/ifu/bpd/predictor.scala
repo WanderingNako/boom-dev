@@ -129,6 +129,14 @@ class BranchPredictionBankResponse(implicit p: Parameters) extends BoomBundle()(
   val f3 = Vec(bankWidth, new BranchPrediction)
 }
 
+// Generic per-cycle performance signal for any predictor bank
+class BranchPredictorPerf(implicit p: Parameters) extends BoomBundle()(p)
+  with HasBoomFrontendParameters
+{
+  val access = UInt(log2Ceil(bankWidth+1).W)
+  val miss   = UInt(log2Ceil(bankWidth+1).W)
+}
+
 abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(p)
   with HasBoomFrontendParameters
 {
@@ -154,10 +162,16 @@ abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(
     val f3_fire = Input(Bool())
 
     val update = Input(Valid(new BranchPredictionBankUpdate))
+
+    // Generic perf report
+    val perf = Output(new BranchPredictorPerf)
   })
   io.resp := io.resp_in(0)
 
   io.f3_meta := 0.U
+
+  io.perf.access := 0.U
+  io.perf.miss   := 0.U
 
   val s0_idx       = fetchIdx(io.f0_pc)
   val s1_idx       = RegNext(s0_idx)
@@ -209,6 +223,12 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
 
     // Update
     val update = Input(Valid(new BranchPredictionUpdate))
+
+    // Aggregated generic predictor perf across all banks
+    val perf = Output(new Bundle {
+      val access = UInt(log2Ceil(fetchWidth+1).W)
+      val miss   = UInt(log2Ceil(fetchWidth+1).W)
+    })
   })
 
   var total_memsize = 0
@@ -226,6 +246,10 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
   override def toString: String = bpdStr.toString
 
   val banked_lhist_providers = Seq.fill(nBanks) { Module(if (localHistoryNSets > 0) new LocalBranchPredictorBank else new NullLocalBranchPredictorBank) }
+
+  // Sum the generic perf report across all banks
+  io.perf.access := banked_predictors.map(_.io.perf.access).reduce(_+&_)
+  io.perf.miss   := banked_predictors.map(_.io.perf.miss).reduce(_+&_)
 
 
   if (nBanks == 1) {

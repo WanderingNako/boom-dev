@@ -291,6 +291,10 @@ class BoomFrontendIO(implicit p: Parameters) extends BoomBundle
   val itlb_hit = Input(Bool())
   val icache_valid_access = Input(Bool())
   val icache_hit = Input(Bool())
+
+  // Generic BPD perf
+  val bpd_access = Input(UInt(5.W))
+  val bpd_miss   = Input(UInt(5.W))
 }
 
 /**
@@ -364,6 +368,10 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   //Enable_PerfCounter_Support
   io.cpu.icache_valid_access := icache.io.icache_valid_access
   io.cpu.icache_hit := icache.io.resp.valid
+
+  //Geneic BPD perf report
+  io.cpu.bpd_access := bpd.io.perf.access
+  io.cpu.bpd_miss   := bpd.io.perf.miss
 
 
   when (RegNext(reset.asBool) && !reset.asBool) {

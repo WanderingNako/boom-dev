@@ -14,6 +14,7 @@ import boom.v3.util.{BoomCoreStringPrefix}
 class ComposedBranchPredictorBank(implicit p: Parameters) extends BranchPredictorBank()(p)
 {
 
+  // components包含Seq(tage, btb, ubtb, bim)，根据配置决定
   val (components, resp) = getBPDComponents(io.resp_in(0), p)
   io.resp := resp
 
@@ -45,4 +46,6 @@ class ComposedBranchPredictorBank(implicit p: Parameters) extends BranchPredicto
 
   val mems = components.map(_.mems).flatten
 
+  io.perf.access := components.map(_.io.perf.access).reduce(_+_)
+  io.perf.miss   := components.map(_.io.perf.miss).reduce(_+_)
 }

@@ -46,7 +46,9 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
   }
 
   class MicroBTBPredictMeta extends Bundle {
+    // 每个slot是否命中
     val hits  = Vec(bankWidth, Bool())
+    // 将来该写到哪个way（在预测时就决定好，并随预测元数据一路带到提交阶段）
     val write_way = UInt(log2Ceil(nWays).W)
   }
 
@@ -67,24 +69,28 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
   val s1_is_br  = Wire(Vec(bankWidth, Bool()))
   val s1_is_jal = Wire(Vec(bankWidth, Bool()))
 
+  // 形状：Vec(bankWidth, Vec(nWays, Bool()))
   val s1_hit_ohs = VecInit((0 until bankWidth) map { i =>
     VecInit((0 until nWays) map { w =>
       meta(w)(i).tag === s1_req_tag(tagSz-1,0)
     })
   })
-  val s1_hits     = s1_hit_ohs.map { oh => oh.reduce(_||_) }
-  val s1_hit_ways = s1_hit_ohs.map { oh => PriorityEncoder(oh) }
+  val s1_hits     = s1_hit_ohs.map { oh => oh.reduce(_||_) }     // 每个slot是否命中, Vec(bankWidth, Bool())
+  val s1_hit_ways = s1_hit_ohs.map { oh => PriorityEncoder(oh) } // 每个slot命中的Way号，Vec(bankWidth, UInt)
 
   for (w <- 0 until bankWidth) {
     val entry_meta = meta(s1_hit_ways(w))(w)
     s1_resp(w).valid := s1_valid && s1_hits(w)
-    s1_resp(w).bits  := (s1_pc.asSInt + (w << 1).S + btb(s1_hit_ways(w))(w).offset).asUInt
+    s1_resp(w).bits  := (s1_pc.asSInt + (w << 1).S + btb(s1_hit_ways(w))(w).offset).asUInt  // RVC指令间隔2字节
     s1_is_br(w)      := s1_resp(w).valid &&  entry_meta.is_br
     s1_is_jal(w)     := s1_resp(w).valid && !entry_meta.is_br
     s1_taken(w)      := !entry_meta.is_br || entry_meta.ctr(1)
 
     s1_meta.hits(w)     := s1_hits(w)
   }
+  
+  // 当查询未命中、需要重新分配一个表项时，选择要替换（踢掉）哪个way的编号
+  // 它既不是LRU，也不是随机，而是一个用当前所有tag + 本次请求index一起做异或折叠得出的伪随机way号
   val alloc_way = {
     val r_metas = Cat(VecInit(meta.map(e => VecInit(e.map(_.tag)))).asUInt, s1_idx(tagSz-1,0))
     val l = log2Ceil(nWays)
@@ -95,8 +101,8 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
     chunks.reduce(_^_)
   }
   s1_meta.write_way := Mux(s1_hits.reduce(_||_),
-    PriorityEncoder(s1_hit_ohs.map(_.asUInt).reduce(_|_)),
-    alloc_way)
+    PriorityEncoder(s1_hit_ohs.map(_.asUInt).reduce(_|_)), // 如果命中，将来就地更新原表项
+    alloc_way) // 如果未命中，将来更新时就分配这个way，覆盖旧内容
 
   for (w <- 0 until bankWidth) {
     io.resp.f1(w).predicted_pc := s1_resp(w)
@@ -109,6 +115,7 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
   }
   io.f3_meta := RegNext(RegNext(s1_meta.asUInt))
 
+  // s1_update是某取指块多的真实分支结果
   val s1_update_cfi_idx = s1_update.bits.cfi_idx.bits
   val s1_update_meta    = s1_update.bits.meta.asTypeOf(new MicroBTBPredictMeta)
   val s1_update_write_way = s1_update_meta.write_way
@@ -120,6 +127,8 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
 
   val s1_update_wbtb_data     = Wire(new MicroBTBEntry)
   s1_update_wbtb_data.offset := new_offset_value
+
+  // 只有当一条分支真正提交、结果确定后，faubtb才更新它的目标和方向计数器
   val s1_update_wbtb_mask = (UIntToOH(s1_update_cfi_idx) &
     Fill(bankWidth, s1_update.bits.cfi_idx.valid && s1_update.valid && s1_update.bits.cfi_taken && s1_update.bits.is_commit_update))
 
@@ -147,6 +156,18 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
       )
     }
   }
+
+  // Generic per report
+  val perf_access_oh = VecInit((0 until bankWidth).map { w =>
+    s1_update.valid && s1_update.bits.is_commit_update &&
+      (s1_update.bits.br_mask(w) ||
+        (s1_update_cfi_idx === w.U && s1_update.bits.cfi_taken && s1_update.bits.cfi_idx.valid))
+  })
+  val perf_miss_oh = VecInit((0 until bankWidth).map { w =>
+    perf_access_oh(w) && !s1_update_meta.hits(w)
+  })
+  io.perf.access := PopCount(perf_access_oh)
+  io.perf.miss   := PopCount(perf_miss_oh)
 
 }
 
