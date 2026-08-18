@@ -133,8 +133,8 @@ class BranchPredictionBankResponse(implicit p: Parameters) extends BoomBundle()(
 class BranchPredictorPerf(implicit p: Parameters) extends BoomBundle()(p)
   with HasBoomFrontendParameters
 {
-  val access = UInt(log2Ceil(bankWidth+1).W)
-  val miss   = UInt(log2Ceil(bankWidth+1).W)
+  val access = UInt(log2Ceil(2*bankWidth+1).W)
+  val miss   = UInt(log2Ceil(2*bankWidth+1).W)
 }
 
 abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(p)
@@ -142,6 +142,9 @@ abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(
 {
   val metaSz = 0
   def nInputs = 1
+
+  // Generic perf report label; empty means this bank does not drive a dedicated counter
+  def perf_name: String = ""
 
   val mems: Seq[Tuple3[String, Int, Int]]
 
@@ -165,6 +168,10 @@ abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(
 
     // Generic perf report
     val perf = Output(new BranchPredictorPerf)
+
+    // Dedicated perf report for FauBTB and BTB
+    val perf_fau = Output(new BranchPredictorPerf)
+    val perf_btb = Output(new BranchPredictorPerf)
   })
   io.resp := io.resp_in(0)
 
@@ -172,6 +179,11 @@ abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(
 
   io.perf.access := 0.U
   io.perf.miss   := 0.U
+
+  io.perf_fau.access := 0.U
+  io.perf_fau.miss   := 0.U
+  io.perf_btb.access := 0.U
+  io.perf_btb.miss   := 0.U
 
   val s0_idx       = fetchIdx(io.f0_pc)
   val s1_idx       = RegNext(s0_idx)
@@ -226,9 +238,13 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
 
     // Aggregated generic predictor perf across all banks
     val perf = Output(new Bundle {
-      val access = UInt(log2Ceil(fetchWidth+1).W)
-      val miss   = UInt(log2Ceil(fetchWidth+1).W)
+      val access = UInt(log2Ceil(2*fetchWidth+1).W)
+      val miss   = UInt(log2Ceil(2*fetchWidth+1).W)
     })
+
+    // Aggregated dedicated FauBTB and BTB perf across all banks
+    val perf_fau = Output(new BranchPredictorPerf)
+    val perf_btb = Output(new BranchPredictorPerf)
   })
 
   var total_memsize = 0
@@ -250,6 +266,12 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
   // Sum the generic perf report across all banks
   io.perf.access := banked_predictors.map(_.io.perf.access).reduce(_+&_)
   io.perf.miss   := banked_predictors.map(_.io.perf.miss).reduce(_+&_)
+
+  // Sum the dedicated FauBTB/BTB perf report across all banks
+  io.perf_fau.access := banked_predictors.map(_.io.perf_fau.access).reduce(_+&_)
+  io.perf_fau.miss   := banked_predictors.map(_.io.perf_fau.miss).reduce(_+&_)
+  io.perf_btb.access := banked_predictors.map(_.io.perf_btb.access).reduce(_+&_)
+  io.perf_btb.miss   := banked_predictors.map(_.io.perf_btb.miss).reduce(_+&_)
 
 
   if (nBanks == 1) {

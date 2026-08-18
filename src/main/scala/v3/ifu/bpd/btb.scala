@@ -22,6 +22,8 @@ case class BoomBTBParams(
 
 class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p: Parameters) extends BranchPredictorBank()(p)
 {
+  override def perf_name = "btb"
+
   override val nSets         = params.nSets
   override val nWays         = params.nWays
   val tagSz         = vaddrBitsExtended - log2Ceil(nSets) - log2Ceil(fetchWidth) - 1
@@ -47,6 +49,7 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
 
   class BTBPredictMeta extends Bundle {
     val write_way = UInt(log2Ceil(nWays).W)
+    val hits      = Vec(bankWidth, Bool())
   }
 
   val s1_meta = Wire(new BTBPredictMeta)
@@ -133,6 +136,7 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
   s1_meta.write_way := Mux(s1_hits.reduce(_||_),
     PriorityEncoder(s1_hit_ohs.map(_.asUInt).reduce(_|_)),
     alloc_way)
+  s1_meta.hits      := VecInit(s1_hits)
 
   val s1_update_cfi_idx = s1_update.bits.cfi_idx.bits
   val s1_update_meta    = s1_update.bits.meta.asTypeOf(new BTBPredictMeta)
@@ -194,6 +198,18 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
   when (s1_update_wbtb_mask =/= 0.U && offset_is_extended) {
     ebtb.write(s1_update_idx, s1_update.bits.target)
   }
+
+  // Generic per report
+  val perf_access_oh = VecInit((0 until bankWidth).map { w =>
+    s1_update.valid && s1_update.bits.is_commit_update &&
+      (s1_update.bits.br_mask(w) ||
+        (s1_update_cfi_idx === w.U && s1_update.bits.cfi_taken && s1_update.bits.cfi_idx.valid))
+  })
+  val perf_miss_oh = VecInit((0 until bankWidth).map { w =>
+    perf_access_oh(w) && !s1_update_meta.hits(w)
+  })
+  io.perf.access := PopCount(perf_access_oh)
+  io.perf.miss   := PopCount(perf_miss_oh)
 
 }
 

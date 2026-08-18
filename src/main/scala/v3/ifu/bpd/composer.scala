@@ -48,4 +48,10 @@ class ComposedBranchPredictorBank(implicit p: Parameters) extends BranchPredicto
 
   io.perf.access := components.map(_.io.perf.access).reduce(_+_)
   io.perf.miss   := components.map(_.io.perf.miss).reduce(_+_)
+
+  // Route the dedicated FauBTB/BTB perf reports to the top level
+  io.perf_fau := components.collectFirst { case c if c.perf_name == "faubtb" => c.io.perf }
+    .getOrElse(0.U.asTypeOf(new BranchPredictorPerf))
+  io.perf_btb := components.collectFirst { case c if c.perf_name == "btb" => c.io.perf }
+    .getOrElse(0.U.asTypeOf(new BranchPredictorPerf))
 }

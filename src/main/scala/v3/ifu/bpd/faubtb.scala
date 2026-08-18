@@ -20,6 +20,8 @@ case class BoomFAMicroBTBParams(
 
 class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBTBParams())(implicit p: Parameters) extends BranchPredictorBank()(p)
 {
+  override def perf_name = "faubtb"
+
   override val nWays         = params.nWays
   val tagSz         = vaddrBitsExtended - log2Ceil(fetchWidth) - 1
   val offsetSz      = params.offsetSz

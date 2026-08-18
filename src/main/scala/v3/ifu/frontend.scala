@@ -295,6 +295,12 @@ class BoomFrontendIO(implicit p: Parameters) extends BoomBundle
   // Generic BPD perf
   val bpd_access = Input(UInt(5.W))
   val bpd_miss   = Input(UInt(5.W))
+
+  // Dedicated FauBTB and BTB perf
+  val fau_access = Input(UInt(5.W))
+  val fau_miss   = Input(UInt(5.W))
+  val btb_access = Input(UInt(5.W))
+  val btb_miss   = Input(UInt(5.W))
 }
 
 /**
@@ -372,6 +378,12 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   //Geneic BPD perf report
   io.cpu.bpd_access := bpd.io.perf.access
   io.cpu.bpd_miss   := bpd.io.perf.miss
+
+  //Dedicated FauBTB and BTB perf report
+  io.cpu.fau_access := bpd.io.perf_fau.access
+  io.cpu.fau_miss   := bpd.io.perf_fau.miss
+  io.cpu.btb_access := bpd.io.perf_btb.access
+  io.cpu.btb_miss   := bpd.io.perf_btb.miss
 
 
   when (RegNext(reset.asBool) && !reset.asBool) {
