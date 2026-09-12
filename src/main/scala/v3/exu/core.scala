@@ -446,6 +446,38 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     event_counters.io.event_signals(w) := 0.U
   }
 
+  val committed_fmul = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) && (
+        rob.io.commit.uops(w).uopc === uopFMUL_S ||
+        rob.io.commit.uops(w).uopc === uopFMUL_D
+      ))
+  ))
+
+  val committed_fadd = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) && (
+        rob.io.commit.uops(w).uopc === uopFADD_S ||
+        rob.io.commit.uops(w).uopc === uopFSUB_S ||
+        rob.io.commit.uops(w).uopc === uopFADD_D ||
+        rob.io.commit.uops(w).uopc === uopFSUB_D
+      ))
+  ))
+
+  val committed_fma = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) && (
+        rob.io.commit.uops(w).uopc === uopFMADD_S ||
+        rob.io.commit.uops(w).uopc === uopFMSUB_S ||
+        rob.io.commit.uops(w).uopc === uopFNMADD_S ||
+        rob.io.commit.uops(w).uopc === uopFNMSUB_S ||
+        rob.io.commit.uops(w).uopc === uopFMADD_D ||
+        rob.io.commit.uops(w).uopc === uopFMSUB_D ||
+        rob.io.commit.uops(w).uopc === uopFNMADD_D ||
+        rob.io.commit.uops(w).uopc === uopFNMSUB_D
+      ))
+  ))
+
   when (startCounter) {
     event_counters.io.event_signals(0) :=   1.U  //cycles
     event_counters.io.event_signals(1) :=  RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) // commit inst
@@ -456,6 +488,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     event_counters.io.event_signals(6) :=  Mux(io.ifu.itlb_hit, 1.U, 0.U) //itlb hit number
     event_counters.io.event_signals(7) :=  Mux(io.ifu.perf.tlbMiss, 1.U, 0.U) //i-tlb start ptw
     // TODO
+    event_counters.io.event_signals(8) :=  committed_fmul
+    event_counters.io.event_signals(9) :=  committed_fadd
+    event_counters.io.event_signals(10) :=  committed_fma
   }
 
   //-------------------------------------------------------------
