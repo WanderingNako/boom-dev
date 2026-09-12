@@ -821,6 +821,14 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends LazyModu
   io.lsu.perf.release := edge.done(tl_out.c)
   io.lsu.perf.acquire := edge.done(tl_out.a)
 
+  // FP memory instruction DCache access/hit counters
+  val s2_fp_access = widthMap(w =>
+    s2_valid(w) && s2_type === t_lsu && s2_req(w).uop.fp_val)
+  val s2_fp_hit = widthMap(w =>
+    s2_fp_access(w) && s2_hit(w) && !s2_nack(w))
+  io.lsu.perf.fp_access := PopCount(s2_fp_access)
+  io.lsu.perf.fp_hit    := PopCount(s2_fp_hit)
+
   // load data gen
   val s2_data_word_prebypass = widthMap(w => s2_data_muxed(w) >> Cat(s2_word_idx(w), 0.U(log2Ceil(coreDataBits).W)))
   val s2_data_word = Wire(Vec(memWidth, UInt()))

@@ -102,6 +102,8 @@ class LSUDMemIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
   val perf = Input(new Bundle {
     val acquire = Bool()
     val release = Bool()
+    val fp_access = UInt(4.W)
+    val fp_hit    = UInt(4.W)
   })
 
 }
@@ -152,6 +154,8 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
     val acquire = Bool()
     val release = Bool()
     val tlbMiss = Bool()
+    val fp_access = UInt(4.W)
+    val fp_hit    = UInt(4.W)
   })
 }
 
@@ -251,6 +255,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.tlbMiss := io.ptw.req.fire
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
+  io.core.perf.fp_access := io.dmem.perf.fp_access
+  io.core.perf.fp_hit    := io.dmem.perf.fp_hit
 
 
 
