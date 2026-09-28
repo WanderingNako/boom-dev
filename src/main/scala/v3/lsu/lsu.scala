@@ -50,7 +50,7 @@ import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util.Str
 
 import boom.v3.common._
-import boom.v3.exu.{BrUpdateInfo, Exception, FuncUnitResp, CommitSignals, ExeUnitResp}
+import boom.v3.exu.{BrUpdateInfo, Exception, FuncUnitResp, CommitSignals, ExeUnitResp, SpecLdWakeup}
 import boom.v3.util.{BoolToChar, AgePriorityEncoder, IsKilledByBranch, GetNewBrMask, WrapInc, IsOlder, UpdateBrMask}
 
 class LSUExeIO(implicit p: Parameters) extends BoomBundle()(p)
@@ -135,7 +135,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   val fence_dmem   = Input(Bool())
 
   // Speculatively tell the IQs that we'll get load data back next cycle
-  val spec_ld_wakeup = Output(Vec(memWidth, Valid(UInt(maxPregSz.W))))
+  val spec_ld_wakeup = Output(Vec(memWidth, Valid(new SpecLdWakeup(maxPregSz))))
   // Tell the IQs that the load we speculated last cycle was misspeculated
   val ld_miss      = Output(Bool())
 
@@ -1264,9 +1264,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   for (w <- 0 until memWidth) {
     io.core.spec_ld_wakeup(w).valid := enableFastLoadUse.B          &&
                                        fired_load_incoming(w)       &&
-                                       !mem_incoming_uop(w).fp_val  &&
                                        mem_incoming_uop(w).pdst =/= 0.U
-    io.core.spec_ld_wakeup(w).bits  := mem_incoming_uop(w).pdst
+    io.core.spec_ld_wakeup(w).bits.pdst  := mem_incoming_uop(w).pdst
+    io.core.spec_ld_wakeup(w).bits.rtype := mem_incoming_uop(w).dst_rtype
   }
 
 
@@ -1391,6 +1391,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     !RegNext(io.core.spec_ld_wakeup(w).valid) ||
     (io.core.exe(w).iresp.valid &&
       io.core.exe(w).iresp.bits.uop.ldq_idx === RegNext(mem_incoming_uop(w).ldq_idx)
+    ) ||
+    (io.core.exe(w).fresp.valid &&
+      io.core.exe(w).fresp.bits.uop.ldq_idx === RegNext(mem_incoming_uop(w).ldq_idx)
     )
   ).reduce(_&&_)
   when (spec_ld_succeed) {

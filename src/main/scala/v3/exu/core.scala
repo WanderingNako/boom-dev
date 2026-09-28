@@ -1076,7 +1076,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   issue_units map { iu =>
      iu.io.spec_ld_wakeup := io.lsu.spec_ld_wakeup
   }
-
+  if (usingFPU) {
+    fp_pipeline.io.spec_ld_wakeup := io.lsu.spec_ld_wakeup
+  }
 
   // Connect the predicate wakeup port
   issue_units map { iu =>
@@ -1152,6 +1154,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // Load-hit Misspeculations
   require (mem_iss_unit.issueWidth <= 2)
   issue_units.map(_.io.ld_miss := io.lsu.ld_miss)
+  if (usingFPU) {
+    fp_pipeline.io.ld_miss := io.lsu.ld_miss
+  }
 
   mem_units.map(u => u.io.com_exception := RegNext(rob.io.flush.valid))
 

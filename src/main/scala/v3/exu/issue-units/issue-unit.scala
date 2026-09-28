@@ -59,6 +59,20 @@ class IqWakeup(val pregSz: Int) extends Bundle
 }
 
 /**
+ * A speculative load wakeup: which physical register the load will write,
+ * and its register type (RT_FIX or RT_FLT). The type is required because
+ * integer and floating-point physical register numbers share the same
+ * numeric space, so a bare pdst cannot distinguish them.
+ *
+ * @param pregSz size of physical destination register
+ */
+class SpecLdWakeup(val pregSz: Int) extends Bundle
+{
+  val pdst  = UInt(width=pregSz.W)
+  val rtype = UInt(width=2.W)
+}
+
+/**
  * IO bundle to interact with the issue unit
  *
  * @param issueWidth amount of operations that can be issued at once
@@ -77,7 +91,7 @@ class IssueUnitIO(
   val wakeup_ports     = Flipped(Vec(numWakeupPorts, Valid(new IqWakeup(maxPregSz))))
   val pred_wakeup_port = Flipped(Valid(UInt(log2Ceil(ftqSz).W)))
 
-  val spec_ld_wakeup   = Flipped(Vec(memWidth, Valid(UInt(width=maxPregSz.W))))
+  val spec_ld_wakeup   = Flipped(Vec(memWidth, Valid(new SpecLdWakeup(maxPregSz))))
 
   // tell the issue unit what each execution pipeline has in terms of functional units
   val fu_types         = Input(Vec(issueWidth, Bits(width=FUC_SZ.W)))
@@ -120,6 +134,7 @@ abstract class IssueUnit(
     dis_uops(w) := io.dis_uops(w).bits
     dis_uops(w).iw_p1_poisoned := false.B
     dis_uops(w).iw_p2_poisoned := false.B
+    dis_uops(w).iw_p3_poisoned := false.B
     dis_uops(w).iw_state := s_valid_1
 
     if (iqType == IQT_MEM.litValue || iqType == IQT_INT.litValue) {

@@ -47,6 +47,9 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
     val to_sdq           = Decoupled(new ExeUnitResp(fLen))           // to Load/Store Unit
     val to_int           = Decoupled(new ExeUnitResp(xLen))           // to integer RF
 
+    val spec_ld_wakeup   = Flipped(Vec(memWidth, Valid(new SpecLdWakeup(maxPregSz))))
+    val ld_miss          = Input(Bool())
+
     val wakeups          = Vec(numWakeupPorts, Valid(new ExeUnitResp(fLen+1)))
     val wb_valids        = Input(Vec(numWakeupPorts, Bool()))
     val wb_pdsts         = Input(Vec(numWakeupPorts, UInt(width=fpPregSz.W)))
@@ -67,15 +70,15 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
                          exe_units.numFrfReadPorts,
                          exe_units.numFrfWritePorts + memWidth,
                          fLen+1,
-                         // No bypassing for any FP units, + memWidth for ll_wb
-                         Seq.fill(exe_units.numFrfWritePorts + memWidth){ false }
+                         // Bypass load write ports only
+                         Seq.fill(memWidth){ true } ++ Seq.fill(exe_units.numFrfWritePorts){ false }
                          ))
   val fregister_read = Module(new RegisterRead(
                          issue_unit.issueWidth,
                          exe_units.withFilter(_.readsFrf).map(_.supportedFuncUnits).toSeq,
                          exe_units.numFrfReadPorts,
                          exe_units.withFilter(_.readsFrf).map(x => 3).toSeq,
-                         0, // No bypass for FP
+                         numLlPorts, // FP load bypass ports
                          0,
                          fLen+1))
 
@@ -91,12 +94,11 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   issue_unit.io.tsc_reg := io.debug_tsc_reg
   issue_unit.io.brupdate := io.brupdate
   issue_unit.io.flush_pipeline := io.flush_pipeline
-  // Don't support ld-hit speculation to FP window.
+  // Speculative load-hit wakeup to FP window.
   for (w <- 0 until memWidth) {
-    issue_unit.io.spec_ld_wakeup(w).valid := false.B
-    issue_unit.io.spec_ld_wakeup(w).bits := 0.U
+    issue_unit.io.spec_ld_wakeup(w) <> io.spec_ld_wakeup(w)
   }
-  issue_unit.io.ld_miss := false.B
+  issue_unit.io.ld_miss := io.ld_miss
 
   require (exe_units.numTotalBypassPorts == 0)
 
@@ -132,7 +134,8 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   for ((writeback, issue_wakeup) <- io.wakeups zip issue_unit.io.wakeup_ports) {
     issue_wakeup.valid := writeback.valid
     issue_wakeup.bits.pdst  := writeback.bits.uop.pdst
-    issue_wakeup.bits.poisoned := false.B
+    issue_wakeup.bits.poisoned :=
+      writeback.bits.uop.iw_p1_poisoned || writeback.bits.uop.iw_p2_poisoned || writeback.bits.uop.iw_p3_poisoned
   }
   issue_unit.io.pred_wakeup_port.valid := false.B
   issue_unit.io.pred_wakeup_port.bits := DontCare
@@ -145,8 +148,16 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   fregister_read.io.rf_read_ports <> fregfile.io.read_ports
   fregister_read.io.prf_read_ports map { port => port.data := false.B }
 
-  fregister_read.io.iss_valids <> iss_valids
+  for (w <- 0 until exe_units.numFrfReaders) {
+    fregister_read.io.iss_valids(w) :=
+      iss_valids(w) && !(io.ld_miss && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned || iss_uops(w).iw_p3_poisoned))
+  }
   fregister_read.io.iss_uops := iss_uops
+  fregister_read.io.iss_uops map { u =>
+    u.iw_p1_poisoned := false.B
+    u.iw_p2_poisoned := false.B
+    u.iw_p3_poisoned := false.B
+  }
 
   fregister_read.io.brupdate := io.brupdate
   fregister_read.io.kill := io.flush_pipeline
@@ -217,6 +228,10 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   io.to_int.bits  := fpiu_unit.io.ll_iresp.bits
   io.to_sdq.bits  := fpiu_unit.io.ll_iresp.bits
   fpiu_unit.io.ll_iresp.ready := io.to_sdq.ready && io.to_int.ready
+
+  // Connect load writeback to register read bypass paths
+  fregister_read.io.bypass(0).valid := ll_wbarb.io.out.valid
+  fregister_read.io.bypass(0).bits  := ll_wbarb.io.out.bits
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

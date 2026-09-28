@@ -11,7 +11,6 @@
 //
 // Note: stores (and AMOs) are "broken down" into 2 uops, but stored within a single issue-slot.
 // TODO XXX make a separate issueSlot for MemoryIssueSlots, and only they break apart stores.
-// TODO Disable ldspec for FP queue.
 
 package boom.v3.exu
 
@@ -44,7 +43,7 @@ class IssueSlotIO(val numWakeupPorts: Int)(implicit p: Parameters) extends BoomB
 
   val wakeup_ports  = Flipped(Vec(numWakeupPorts, Valid(new IqWakeup(maxPregSz))))
   val pred_wakeup_port = Flipped(Valid(UInt(log2Ceil(ftqSz).W)))
-  val spec_ld_wakeup = Flipped(Vec(memWidth, Valid(UInt(width=maxPregSz.W))))
+  val spec_ld_wakeup = Flipped(Vec(memWidth, Valid(new SpecLdWakeup(maxPregSz))))
   val in_uop        = Flipped(Valid(new MicroOp())) // if valid, this WILL overwrite an entry!
   val out_uop   = Output(new MicroOp()) // the updated slot uop; will be shifted upwards in a collasping queue.
   val uop           = Output(new MicroOp()) // the current Slot's uop. Sent down the pipeline when issued.
@@ -94,10 +93,13 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   // SO if poisoned is true, set it to false!
   val p1_poisoned = RegInit(false.B)
   val p2_poisoned = RegInit(false.B)
+  val p3_poisoned = RegInit(false.B)
   p1_poisoned := false.B
   p2_poisoned := false.B
+  p3_poisoned := false.B
   val next_p1_poisoned = Mux(io.in_uop.valid, io.in_uop.bits.iw_p1_poisoned, p1_poisoned)
   val next_p2_poisoned = Mux(io.in_uop.valid, io.in_uop.bits.iw_p2_poisoned, p2_poisoned)
+  val next_p3_poisoned = Mux(io.in_uop.valid, io.in_uop.bits.iw_p3_poisoned, p3_poisoned)
 
   val slot_uop = RegInit(NullMicroOp)
   val next_uop = Mux(io.in_uop.valid, io.in_uop.bits, slot_uop)
@@ -133,11 +135,11 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   } .elsewhen ((io.grant && (state === s_valid_1)) ||
     (io.grant && (state === s_valid_2) && p1 && p2 && ppred)) {
     // try to issue this uop.
-    when (!(io.ldspec_miss && (p1_poisoned || p2_poisoned))) {
+    when (!(io.ldspec_miss && (p1_poisoned || p2_poisoned || p3_poisoned))) {
       next_state := s_invalid
     }
   } .elsewhen (io.grant && (state === s_valid_2)) {
-    when (!(io.ldspec_miss && (p1_poisoned || p2_poisoned))) {
+    when (!(io.ldspec_miss && (p1_poisoned || p2_poisoned || p3_poisoned))) {
       next_state := s_valid_1
       when (p1) {
         slot_uop.uopc := uopSTD
@@ -180,6 +182,10 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
     assert(next_uop.prs2 =/= 0.U, "Poison bit can't be set for prs2=x0!")
     p2 := false.B
   }
+  when (io.ldspec_miss && next_p3_poisoned) {
+    assert(next_uop.prs3 =/= 0.U, "Poison bit can't be set for prs3=x0!")
+    p3 := false.B
+  }
 
   for (i <- 0 until numWakeupPorts) {
     when (io.wakeup_ports(i).valid &&
@@ -200,25 +206,33 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   }
 
   for (w <- 0 until memWidth) {
-    assert (!(io.spec_ld_wakeup(w).valid && io.spec_ld_wakeup(w).bits === 0.U),
+    assert (!(io.spec_ld_wakeup(w).valid && io.spec_ld_wakeup(w).bits.pdst === 0.U),
       "Loads to x0 should never speculatively wakeup other instructions")
   }
 
-  // TODO disable if FP IQ.
   for (w <- 0 until memWidth) {
+    val ld_rtype = io.spec_ld_wakeup(w).bits.rtype
     when (io.spec_ld_wakeup(w).valid &&
-      io.spec_ld_wakeup(w).bits === next_uop.prs1 &&
-      next_uop.lrs1_rtype === RT_FIX) {
+      io.spec_ld_wakeup(w).bits.pdst === next_uop.prs1 &&
+      next_uop.lrs1_rtype === ld_rtype) {
       p1 := true.B
       p1_poisoned := true.B
       assert (!next_p1_poisoned)
     }
     when (io.spec_ld_wakeup(w).valid &&
-      io.spec_ld_wakeup(w).bits === next_uop.prs2 &&
-      next_uop.lrs2_rtype === RT_FIX) {
+      io.spec_ld_wakeup(w).bits.pdst === next_uop.prs2 &&
+      next_uop.lrs2_rtype === ld_rtype) {
       p2 := true.B
       p2_poisoned := true.B
       assert (!next_p2_poisoned)
+    }
+    when (io.spec_ld_wakeup(w).valid &&
+      io.spec_ld_wakeup(w).bits.pdst === next_uop.prs3 &&
+      next_uop.frs3_en &&
+      ld_rtype === RT_FLT) {
+      p3 := true.B
+      p3_poisoned := true.B
+      assert (!next_p3_poisoned)
     }
   }
 
@@ -255,10 +269,11 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   io.uop := slot_uop
   io.uop.iw_p1_poisoned := p1_poisoned
   io.uop.iw_p2_poisoned := p2_poisoned
+  io.uop.iw_p3_poisoned := p3_poisoned
 
   // micro-op will vacate due to grant.
   val may_vacate = io.grant && ((state === s_valid_1) || (state === s_valid_2) && p1 && p2 && ppred)
-  val squash_grant = io.ldspec_miss && (p1_poisoned || p2_poisoned)
+  val squash_grant = io.ldspec_miss && (p1_poisoned || p2_poisoned || p3_poisoned)
   io.will_be_valid := is_valid && !(may_vacate && !squash_grant)
 
   io.out_uop            := slot_uop
@@ -273,6 +288,7 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   io.out_uop.ppred_busy := !ppred
   io.out_uop.iw_p1_poisoned := p1_poisoned
   io.out_uop.iw_p2_poisoned := p2_poisoned
+  io.out_uop.iw_p3_poisoned := p3_poisoned
 
   when (state === s_valid_2) {
     when (p1 && p2 && ppred) {

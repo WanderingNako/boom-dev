@@ -50,11 +50,10 @@ class MicroOp(implicit p: Parameters) extends BoomBundle
   // What is the next state of this uop in the issue window? useful
   // for the compacting queue.
   val iw_state         = UInt(2.W)
-  // Has operand 1 or 2 been waken speculatively by a load?
-  // Only integer operands are speculaively woken up,
-  // so we can ignore p3.
+  // Has operand 1, 2, or 3 been waken speculatively by a load?
   val iw_p1_poisoned   = Bool()
   val iw_p2_poisoned   = Bool()
+  val iw_p3_poisoned   = Bool()
 
   val is_br            = Bool()                      // is this micro-op a (branch) vs a regular PC+4 inst?
   val is_jalr          = Bool()                      // is this a jump? (jal or jalr)
