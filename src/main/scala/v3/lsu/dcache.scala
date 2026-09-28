@@ -821,11 +821,12 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends LazyModu
   io.lsu.perf.release := edge.done(tl_out.c)
   io.lsu.perf.acquire := edge.done(tl_out.a)
 
-  // FP memory instruction DCache access/hit counters
+  // FP load memory instruction DCache access/hit counters
   val s2_fp_access = widthMap(w =>
-    s2_valid(w) && s2_type === t_lsu && s2_req(w).uop.fp_val)
+    s2_valid(w) && s2_type === t_lsu && s2_req(w).uop.fp_val &&
+    s2_req(w).uop.uses_ldq && !s2_nack(w))
   val s2_fp_hit = widthMap(w =>
-    s2_fp_access(w) && s2_hit(w) && !s2_nack(w))
+    s2_fp_access(w) && s2_hit(w))
   io.lsu.perf.fp_access := PopCount(s2_fp_access)
   io.lsu.perf.fp_hit    := PopCount(s2_fp_hit)
 
