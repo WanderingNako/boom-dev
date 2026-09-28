@@ -478,15 +478,68 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       ))
   ))
 
+  val committed_f2i = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) &&
+      rob.io.commit.uops(w).fu_code_is(FU_F2I))
+  ))
+
+  val committed_f2f = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) && (
+        rob.io.commit.uops(w).uopc === uopFSGNJ_S   ||
+        rob.io.commit.uops(w).uopc === uopFSGNJ_D   ||
+        rob.io.commit.uops(w).uopc === uopFCVT_S_D  ||
+        rob.io.commit.uops(w).uopc === uopFCVT_D_S  ||
+        rob.io.commit.uops(w).uopc === uopFMINMAX_S ||
+        rob.io.commit.uops(w).uopc === uopFMINMAX_D
+      ))
+  ))
+
+  val committed_fdiv = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) && (
+        rob.io.commit.uops(w).uopc === uopFDIV_S ||
+        rob.io.commit.uops(w).uopc === uopFDIV_D
+      ))
+  ))
+
+  val committed_fsqrt = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) && (
+        rob.io.commit.uops(w).uopc === uopFSQRT_S ||
+        rob.io.commit.uops(w).uopc === uopFSQRT_D
+      ))
+  ))
+
+  val committed_fld = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) &&
+      rob.io.commit.uops(w).fp_val &&
+      rob.io.commit.uops(w).uses_ldq)
+  ))
+
+  val committed_fst = RegNext(PopCount(
+    (0 until coreWidth).map(w =>
+      rob.io.commit.arch_valids(w) &&
+      rob.io.commit.uops(w).fp_val &&
+      rob.io.commit.uops(w).uses_stq)
+  ))
+
   when (startCounter) {
     event_counters.io.event_signals(0) :=   1.U  //cycles
     event_counters.io.event_signals(1) :=  RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) // commit inst
-    event_counters.io.event_signals(2) :=  io.lsu.perf.fp_access // FP mem 指令 D$ 访问次数
-    event_counters.io.event_signals(3) :=  io.lsu.perf.fp_hit    // FP mem 指令 D$ 命中次数
+    event_counters.io.event_signals(2) :=  io.lsu.perf.fp_access // FP load 指令 D$ 访问次数(已排除 nack)
+    event_counters.io.event_signals(3) :=  io.lsu.perf.fp_hit    // FP load 指令 D$ 命中次数
     event_counters.io.event_signals(4) :=  committed_fmul
     event_counters.io.event_signals(5) :=  committed_fadd
     event_counters.io.event_signals(6) :=  committed_fma
-    event_counters.io.event_signals(7) :=  0.U
+    event_counters.io.event_signals(7) :=  committed_f2i
+    event_counters.io.event_signals(8) :=  committed_f2f
+    event_counters.io.event_signals(9) := committed_fdiv
+    event_counters.io.event_signals(10) := committed_fsqrt
+    event_counters.io.event_signals(11) := committed_fld
+    event_counters.io.event_signals(12) := committed_fst
   }
 
   //-------------------------------------------------------------
