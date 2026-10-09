@@ -55,6 +55,8 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
     val wb_pdsts         = Input(Vec(numWakeupPorts, UInt(width=fpPregSz.W)))
 
     val debug_tsc_reg    = Input(UInt(width=xLen.W))
+    val fp_poisoned_iss  = Output(UInt(4.W))
+    val fp_poisoned_kill = Output(UInt(4.W))
     val debug_wb_wdata   = Output(Vec(numWakeupPorts, UInt((fLen+1).W)))
   })
 
@@ -161,6 +163,12 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
 
   fregister_read.io.brupdate := io.brupdate
   fregister_read.io.kill := io.flush_pipeline
+
+  // FP poison counters
+  io.fp_poisoned_iss := PopCount((0 until exe_units.numFrfReaders).map(w =>
+    iss_valids(w) && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned || iss_uops(w).iw_p3_poisoned)))
+  io.fp_poisoned_kill := PopCount((0 until exe_units.numFrfReaders).map(w =>
+    iss_valids(w) && io.ld_miss && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned || iss_uops(w).iw_p3_poisoned)))
 
   //-------------------------------------------------------------
   // **** Execute Stage ****

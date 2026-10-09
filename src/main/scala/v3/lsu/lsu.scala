@@ -156,6 +156,8 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
     val tlbMiss = Bool()
     val fp_access = UInt(4.W)
     val fp_hit    = UInt(4.W)
+    val fp_spec_wakeup_total = UInt(4.W)
+    val fp_spec_wakeup_miss  = UInt(4.W)
   })
 }
 
@@ -1399,6 +1401,19 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   when (spec_ld_succeed) {
     io.core.ld_miss := false.B
   }
+
+  // FP speculative load wakeup performance counters
+  val fp_spec_fired = widthMap(w =>
+    fired_load_incoming(w) && mem_incoming_uop(w).pdst =/= 0.U && mem_incoming_uop(w).dst_rtype === RT_FLT)
+  io.core.perf.fp_spec_wakeup_total := PopCount(fp_spec_fired)
+
+  val fp_spec_fired_r = widthMap(w => RegNext(
+    fired_load_incoming(w) && mem_incoming_uop(w).pdst =/= 0.U && mem_incoming_uop(w).dst_rtype === RT_FLT))
+  io.core.perf.fp_spec_wakeup_miss := PopCount(widthMap(w =>
+    fp_spec_fired_r(w) &&
+    !(io.core.exe(w).fresp.valid &&
+      io.core.exe(w).fresp.bits.uop.ldq_idx === RegNext(mem_incoming_uop(w).ldq_idx))
+  ))
 
 
   //-------------------------------------------------------------
