@@ -72,15 +72,15 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
                          exe_units.numFrfReadPorts,
                          exe_units.numFrfWritePorts + memWidth,
                          fLen+1,
-                         // Bypass load write ports only
-                         Seq.fill(memWidth){ true } ++ Seq.fill(exe_units.numFrfWritePorts){ false }
+                         // Bypass load write ports only when FP spec ld wakeup is enabled
+                         Seq.fill(memWidth){ enableFPSpecLdWakeup } ++ Seq.fill(exe_units.numFrfWritePorts){ false }
                          ))
   val fregister_read = Module(new RegisterRead(
                          issue_unit.issueWidth,
                          exe_units.withFilter(_.readsFrf).map(_.supportedFuncUnits).toSeq,
                          exe_units.numFrfReadPorts,
                          exe_units.withFilter(_.readsFrf).map(x => 3).toSeq,
-                         numLlPorts, // FP load bypass ports
+                         if (enableFPSpecLdWakeup) numLlPorts else 0, // FP load bypass ports
                          0,
                          fLen+1))
 
@@ -97,10 +97,18 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   issue_unit.io.brupdate := io.brupdate
   issue_unit.io.flush_pipeline := io.flush_pipeline
   // Speculative load-hit wakeup to FP window.
-  for (w <- 0 until memWidth) {
-    issue_unit.io.spec_ld_wakeup(w) <> io.spec_ld_wakeup(w)
+  if (enableFPSpecLdWakeup) {
+    for (w <- 0 until memWidth) {
+      issue_unit.io.spec_ld_wakeup(w) <> io.spec_ld_wakeup(w)
+    }
+    issue_unit.io.ld_miss := io.ld_miss
+  } else {
+    for (w <- 0 until memWidth) {
+      issue_unit.io.spec_ld_wakeup(w).valid := false.B
+      issue_unit.io.spec_ld_wakeup(w).bits := DontCare
+    }
+    issue_unit.io.ld_miss := false.B
   }
-  issue_unit.io.ld_miss := io.ld_miss
 
   require (exe_units.numTotalBypassPorts == 0)
 
@@ -136,8 +144,12 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   for ((writeback, issue_wakeup) <- io.wakeups zip issue_unit.io.wakeup_ports) {
     issue_wakeup.valid := writeback.valid
     issue_wakeup.bits.pdst  := writeback.bits.uop.pdst
-    issue_wakeup.bits.poisoned :=
-      writeback.bits.uop.iw_p1_poisoned || writeback.bits.uop.iw_p2_poisoned || writeback.bits.uop.iw_p3_poisoned
+    if (enableFPSpecLdWakeup) {
+      issue_wakeup.bits.poisoned :=
+        writeback.bits.uop.iw_p1_poisoned || writeback.bits.uop.iw_p2_poisoned || writeback.bits.uop.iw_p3_poisoned
+    } else {
+      issue_wakeup.bits.poisoned := false.B
+    }
   }
   issue_unit.io.pred_wakeup_port.valid := false.B
   issue_unit.io.pred_wakeup_port.bits := DontCare
@@ -151,8 +163,12 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   fregister_read.io.prf_read_ports map { port => port.data := false.B }
 
   for (w <- 0 until exe_units.numFrfReaders) {
-    fregister_read.io.iss_valids(w) :=
-      iss_valids(w) && !(io.ld_miss && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned || iss_uops(w).iw_p3_poisoned))
+    if (enableFPSpecLdWakeup) {
+      fregister_read.io.iss_valids(w) :=
+        iss_valids(w) && !(io.ld_miss && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned || iss_uops(w).iw_p3_poisoned))
+    } else {
+      fregister_read.io.iss_valids(w) := iss_valids(w)
+    }
   }
   fregister_read.io.iss_uops := iss_uops
   fregister_read.io.iss_uops map { u =>
@@ -238,8 +254,10 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   fpiu_unit.io.ll_iresp.ready := io.to_sdq.ready && io.to_int.ready
 
   // Connect load writeback to register read bypass paths
-  fregister_read.io.bypass(0).valid := ll_wbarb.io.out.valid
-  fregister_read.io.bypass(0).bits  := ll_wbarb.io.out.bits
+  if (enableFPSpecLdWakeup) {
+    fregister_read.io.bypass(0).valid := ll_wbarb.io.out.valid
+    fregister_read.io.bypass(0).bits  := ll_wbarb.io.out.bits
+  }
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

@@ -41,6 +41,7 @@ case class BoomCoreParams(
   enableAgePriorityIssue: Boolean = true,
   enablePrefetching: Boolean = false,
   enableFastLoadUse: Boolean = true,
+  enableFPSpecLdWakeup: Boolean = false,
   enableCommitMapTable: Boolean = false,
   enableFastPNR: Boolean = false,
   enableSFBOpt: Boolean = false,
@@ -236,6 +237,8 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
   require(icacheParams.nSets <= 64, "Handling aliases in the ICache is buggy.")
 
   val enableFastLoadUse = boomParams.enableFastLoadUse
+  val enableFPSpecLdWakeup = boomParams.enableFPSpecLdWakeup
+  require (!enableFPSpecLdWakeup || !usingFPU || memWidth == 1)
   val enablePrefetching = boomParams.enablePrefetching
   val nLBEntries = dcacheParams.nMSHRs
 

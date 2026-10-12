@@ -543,7 +543,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     // 准确率 = (total - miss) / total
     event_counters.io.event_signals(13) := io.lsu.perf.fp_spec_wakeup_total // FP spec wakeup 总次数
     event_counters.io.event_signals(14) := io.lsu.perf.fp_spec_wakeup_miss  // FP spec miss 次数
-    // posison浪费率 = kill / miss
+    // posison浪费率 = kill / iss
     event_counters.io.event_signals(15) := fp_pipeline.io.fp_poisoned_iss   // 带 posion 位发射的FP uop 数
     event_counters.io.event_signals(16) := fp_pipeline.io.fp_poisoned_kill  // 被 ld_miss 在RRD 截杀的 FP uop 数
   }

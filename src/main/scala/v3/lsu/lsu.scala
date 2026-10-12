@@ -1266,7 +1266,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   for (w <- 0 until memWidth) {
     io.core.spec_ld_wakeup(w).valid := enableFastLoadUse.B          &&
                                        fired_load_incoming(w)       &&
-                                       mem_incoming_uop(w).pdst =/= 0.U
+                                       mem_incoming_uop(w).pdst =/= 0.U &&
+                                       (!mem_incoming_uop(w).fp_val || enableFPSpecLdWakeup.B)
     io.core.spec_ld_wakeup(w).bits.pdst  := mem_incoming_uop(w).pdst
     io.core.spec_ld_wakeup(w).bits.rtype := mem_incoming_uop(w).dst_rtype
   }
@@ -1404,11 +1405,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   // FP speculative load wakeup performance counters
   val fp_spec_fired = widthMap(w =>
-    fired_load_incoming(w) && mem_incoming_uop(w).pdst =/= 0.U && mem_incoming_uop(w).dst_rtype === RT_FLT)
+    enableFPSpecLdWakeup.B && fired_load_incoming(w) &&
+    mem_incoming_uop(w).pdst =/= 0.U && mem_incoming_uop(w).dst_rtype === RT_FLT)
   io.core.perf.fp_spec_wakeup_total := PopCount(fp_spec_fired)
 
   val fp_spec_fired_r = widthMap(w => RegNext(
-    fired_load_incoming(w) && mem_incoming_uop(w).pdst =/= 0.U && mem_incoming_uop(w).dst_rtype === RT_FLT))
+    enableFPSpecLdWakeup.B && fired_load_incoming(w) &&
+    mem_incoming_uop(w).pdst =/= 0.U && mem_incoming_uop(w).dst_rtype === RT_FLT))
   io.core.perf.fp_spec_wakeup_miss := PopCount(widthMap(w =>
     fp_spec_fired_r(w) &&
     !(io.core.exe(w).fresp.valid &&
