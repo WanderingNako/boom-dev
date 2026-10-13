@@ -172,8 +172,12 @@ class FPU(implicit p: Parameters) extends BoomModule with tile.HasFPUParameters
   val io = IO(new Bundle {
     val req = Flipped(new ValidIO(new FpuReq))
     val resp = new ValidIO(new ExeUnitResp(65))
+    // Early, unpadded view of the FP-to-Int result for toint-only uops,
+    // available two cycles after the request.
+    val toint_early = new ValidIO(new ExeUnitResp(65))
   })
   io.resp.bits := DontCare
+  io.toint_early := DontCare
 
   // all FP units are padded out to the same latency for easy scheduling of the write port
   val fpu_latency = dfmaLatency
@@ -228,6 +232,11 @@ class FPU(implicit p: Parameters) extends BoomModule with tile.HasFPUParameters
   fpmu.io.lt := fpiu.io.out.bits.lt
   val fpmu_double = Pipe(io.req.valid && fp_ctrl.fastpipe, fp_ctrl.typeTagOut === D, fpu_latency).bits
 
+  // Early, unpadded version of fpiu_out: the FPToInt result two cycles after
+  // the request, instead of padded out to the FMA latency.
+  val fpiu_early_out = Pipe(RegNext(fpiu.io.in.valid && !fp_ctrl.fastpipe),
+                            fpiu.io.out.bits, 1)
+
   // Response (all FP units have been padded out to the same latency)
   io.resp.valid := fpiu_out.valid ||
                    fpmu.io.out.valid ||
@@ -248,4 +257,10 @@ class FPU(implicit p: Parameters) extends BoomModule with tile.HasFPUParameters
   io.resp.bits.data              := fpu_out_data
   io.resp.bits.fflags.valid      := io.resp.valid
   io.resp.bits.fflags.bits.flags := fpu_out_exc
+
+  io.toint_early.valid := fpiu_early_out.valid
+  io.toint_early.bits.data :=
+    Mux(fpiu_early_out.valid, fpiu_early_out.bits.toint, 0.U((fLen+1).W))
+  io.toint_early.bits.fflags.valid := fpiu_early_out.valid
+  io.toint_early.bits.fflags.bits.flags := fpiu_early_out.bits.exc
 }

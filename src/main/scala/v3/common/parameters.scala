@@ -41,6 +41,7 @@ case class BoomCoreParams(
   enableAgePriorityIssue: Boolean = true,
   enablePrefetching: Boolean = false,
   enableFastLoadUse: Boolean = true,
+  enableFPF2IFastWakeup: Boolean = true,
   enableCommitMapTable: Boolean = false,
   enableFastPNR: Boolean = false,
   enableSFBOpt: Boolean = false,
@@ -207,6 +208,10 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
   require (sfmaLatency == dfmaLatency)
 
   val intToFpLatency = boomParams.intToFpLatency
+
+  // Enqueue unpadded FP-to-Int results into the FPIU queue two cycles after
+  // the request instead of waiting for the writeback padded to the FMA latency.
+  val enableFPF2IFastWakeup = boomParams.enableFPF2IFastWakeup
 
   //************************************
   // Issue Units

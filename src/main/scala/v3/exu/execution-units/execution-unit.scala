@@ -536,13 +536,24 @@ class FPUExeUnit(
     // buffer up results since we share write-port on integer regfile.
     val queue = Module(new BranchKillableQueue(new ExeUnitResp(dataWidth),
       entries = dfmaLatency + 3)) // TODO being overly conservative
-    queue.io.enq.valid       := (fpu.io.resp.valid &&
-                                 fpu.io.resp.bits.uop.fu_code_is(FU_F2I) &&
-                                 fpu.io.resp.bits.uop.uopc =/= uopSTA) // STA means store data gen for floating point
-    queue.io.enq.bits.uop    := fpu.io.resp.bits.uop
-    queue.io.enq.bits.data   := fpu.io.resp.bits.data
-    queue.io.enq.bits.predicated := fpu.io.resp.bits.predicated
-    queue.io.enq.bits.fflags := fpu.io.resp.bits.fflags
+    if (enableFPF2IFastWakeup) {
+      // Enqueue the unpadded FP-to-Int result (two cycles after the request)
+      // instead of waiting for the writeback padded to the FMA latency; the
+      // queue exists precisely to absorb shared write-port conflicts.
+      queue.io.enq.valid       := fpu.io.early_toint.valid
+      queue.io.enq.bits.uop    := fpu.io.early_toint.bits.uop
+      queue.io.enq.bits.data   := fpu.io.early_toint.bits.data
+      queue.io.enq.bits.predicated := fpu.io.early_toint.bits.predicated
+      queue.io.enq.bits.fflags := fpu.io.early_toint.bits.fflags
+    } else {
+      queue.io.enq.valid       := (fpu.io.resp.valid &&
+                                   fpu.io.resp.bits.uop.fu_code_is(FU_F2I) &&
+                                   fpu.io.resp.bits.uop.uopc =/= uopSTA) // STA means store data gen for floating point
+      queue.io.enq.bits.uop    := fpu.io.resp.bits.uop
+      queue.io.enq.bits.data   := fpu.io.resp.bits.data
+      queue.io.enq.bits.predicated := fpu.io.resp.bits.predicated
+      queue.io.enq.bits.fflags := fpu.io.resp.bits.fflags
+    }
     queue.io.brupdate          := io.brupdate
     queue.io.flush           := io.req.bits.kill
 

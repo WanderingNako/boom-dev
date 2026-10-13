@@ -153,6 +153,7 @@ class BrUpdateMasks(implicit p: Parameters) extends BoomBundle
  * @param numBypassStages how many bypass stages does the function unit have
  * @param dataWidth width of the data being operated on in the functional unit
  * @param hasBranchUnit does this functional unit have a branch unit?
+ * @param emitsEarlyToint does this functional unit emit an early, unpadded FP-to-Int result?
  */
 abstract class FunctionalUnit(
   val isPipelined: Boolean,
@@ -162,7 +163,8 @@ abstract class FunctionalUnit(
   val isJmpUnit: Boolean = false,
   val isAluUnit: Boolean = false,
   val isMemAddrCalcUnit: Boolean = false,
-  val needsFcsr: Boolean = false)
+  val needsFcsr: Boolean = false,
+  val emitsEarlyToint: Boolean = false)
   (implicit p: Parameters) extends BoomModule
 {
   val io = IO(new Bundle {
@@ -175,6 +177,10 @@ abstract class FunctionalUnit(
 
     // only used by the fpu unit
     val fcsr_rm = if (needsFcsr) Input(UInt(tile.FPConstants.RM_SZ.W)) else null
+
+    // only used by the fpu unit (enableFPF2IFastWakeup): early, unpadded
+    // FP-to-Int result available two cycles after the request.
+    val early_toint = if (emitsEarlyToint) Output(Valid(new ExeUnitResp(dataWidth))) else null
 
     // only used by branch unit
     val brinfo     = if (isAluUnit) Output(new BrResolutionInfo()) else null
@@ -192,6 +198,10 @@ abstract class FunctionalUnit(
 
   io.resp.valid := false.B
   io.resp.bits := DontCare
+
+  if (emitsEarlyToint) {
+    io.early_toint := DontCare
+  }
 
   if (isJmpUnit) {
     io.get_ftq_pc.ftq_idx := DontCare
@@ -218,7 +228,8 @@ abstract class PipelinedFunctionalUnit(
   isJmpUnit: Boolean = false,
   isAluUnit: Boolean = false,
   isMemAddrCalcUnit: Boolean = false,
-  needsFcsr: Boolean = false
+  needsFcsr: Boolean = false,
+  emitsEarlyToint: Boolean = false
   )(implicit p: Parameters) extends FunctionalUnit(
     isPipelined = true,
     numStages = numStages,
@@ -227,7 +238,8 @@ abstract class PipelinedFunctionalUnit(
     isJmpUnit = isJmpUnit,
     isAluUnit = isAluUnit,
     isMemAddrCalcUnit = isMemAddrCalcUnit,
-    needsFcsr = needsFcsr)
+    needsFcsr = needsFcsr,
+    emitsEarlyToint = emitsEarlyToint)
 {
   // Pipelined functional unit is always ready.
   io.req.ready := true.B
@@ -567,7 +579,8 @@ class FPUUnit(implicit p: Parameters)
     numBypassStages = 0,
     earliestBypassStage = 0,
     dataWidth = 65,
-    needsFcsr = true)
+    needsFcsr = true,
+    emitsEarlyToint = true)
 {
   val fpu = Module(new FPU())
   fpu.io.req.valid         := io.req.valid
@@ -581,6 +594,41 @@ class FPUUnit(implicit p: Parameters)
   io.resp.bits.fflags.valid      := fpu.io.resp.bits.fflags.valid
   io.resp.bits.fflags.bits.uop   := io.resp.bits.uop
   io.resp.bits.fflags.bits.flags := fpu.io.resp.bits.fflags.bits.flags // kill me now
+
+  // Early, unpadded FP-to-Int response (EXE+2), so that FPUExeUnit can enqueue
+  // the FP-to-Int result into the FPIU queue before the writeback that has
+  // been padded out to the FMA latency.
+  if (enableFPF2IFastWakeup) {
+    val early_sel  = io.req.valid &&
+                     io.req.bits.uop.fu_code_is(FU_F2I) &&
+                     io.req.bits.uop.uopc =/= uopSTA
+    val early_kill = io.req.bits.kill || IsKilledByBranch(io.brupdate, io.req.bits.uop)
+
+    val early_s1_valid = RegInit(false.B)
+    val early_s1_uop   = Reg(new MicroOp())
+    val early_s2_valid = RegInit(false.B)
+    val early_s2_uop   = Reg(new MicroOp())
+
+    early_s1_valid := early_sel && !early_kill
+    early_s1_uop   := io.req.bits.uop
+    early_s1_uop.br_mask := GetNewBrMask(io.brupdate, io.req.bits.uop)
+
+    early_s2_valid := early_s1_valid &&
+                      !IsKilledByBranch(io.brupdate, early_s1_uop) &&
+                      !io.req.bits.kill
+    early_s2_uop   := early_s1_uop
+    early_s2_uop.br_mask := GetNewBrMask(io.brupdate, early_s1_uop)
+
+    io.early_toint.valid := early_s2_valid &&
+                            fpu.io.toint_early.valid &&
+                            !IsKilledByBranch(io.brupdate, early_s2_uop)
+    io.early_toint.bits.uop := early_s2_uop
+    io.early_toint.bits.predicated := false.B
+    io.early_toint.bits.data := fpu.io.toint_early.bits.data
+    io.early_toint.bits.fflags.valid := io.early_toint.valid
+    io.early_toint.bits.fflags.bits.uop := early_s2_uop
+    io.early_toint.bits.fflags.bits.flags := fpu.io.toint_early.bits.fflags.bits.flags
+  }
 }
 
 /**
