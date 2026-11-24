@@ -59,7 +59,7 @@ class LSUExeIO(implicit p: Parameters) extends BoomBundle()(p)
   val req       = Flipped(new ValidIO(new FuncUnitResp(xLen)))
   // Send load data to regfiles
   val iresp    = new DecoupledIO(new boom.v3.exu.ExeUnitResp(xLen))
-  val fresp    = new DecoupledIO(new boom.v3.exu.ExeUnitResp(xLen+1)) // TODO: Should this be fLen?
+  val fresp    = new DecoupledIO(new boom.v3.exu.ExeUnitResp(fLen max xLen))
 }
 
 class BoomDCacheReq(implicit p: Parameters) extends BoomBundle()(p)
@@ -1279,6 +1279,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     io.core.exe(w).fresp.bits  := DontCare
   }
 
+  // FLW preserves the low word and sets the upper bits for NaN boxing.
+  def boxFpLoad(data: UInt, size: UInt): UInt =
+    Mux(size === 2.U, Cat(Fill(xLen - 32, 1.U), data(31, 0)), data)
+
   val dmem_resp_fired = WireInit(widthMap(w => false.B))
 
   for (w <- 0 until memWidth) {
@@ -1319,7 +1323,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         io.core.exe(w).iresp.valid     := send_iresp
         io.core.exe(w).iresp.bits.data := io.dmem.resp(w).bits.data
         io.core.exe(w).fresp.valid     := send_fresp
-        io.core.exe(w).fresp.bits.data := io.dmem.resp(w).bits.data
+        io.core.exe(w).fresp.bits.data := boxFpLoad(io.dmem.resp(w).bits.data, ldq(ldq_idx).bits.uop.mem_size)
 
         assert(send_iresp ^ send_fresp)
         dmem_resp_fired(w) := true.B
@@ -1367,7 +1371,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       io.core.exe(w).iresp.bits.uop  := forward_uop
       io.core.exe(w).fresp.bits.uop  := forward_uop
       io.core.exe(w).iresp.bits.data := loadgen.data
-      io.core.exe(w).fresp.bits.data := loadgen.data
+      io.core.exe(w).fresp.bits.data := boxFpLoad(loadgen.data, forward_uop.mem_size)
 
       when (data_ready && live) {
         ldq(f_idx).bits.succeeded := data_ready

@@ -158,9 +158,9 @@ class FMADecoder extends Module
 class FpuReq()(implicit p: Parameters) extends BoomBundle
 {
   val uop      = new MicroOp()
-  val rs1_data = Bits(65.W)
-  val rs2_data = Bits(65.W)
-  val rs3_data = Bits(65.W)
+  val rs1_data = Bits(64.W)
+  val rs2_data = Bits(64.W)
+  val rs3_data = Bits(64.W)
   val fcsr_rm  = Bits(tile.FPConstants.RM_SZ.W)
 }
 
@@ -171,7 +171,7 @@ class FPU(implicit p: Parameters) extends BoomModule with tile.HasFPUParameters
 {
   val io = IO(new Bundle {
     val req = Flipped(new ValidIO(new FpuReq))
-    val resp = new ValidIO(new ExeUnitResp(65))
+    val resp = new ValidIO(new ExeUnitResp(64))
   })
   io.resp.bits := DontCare
 
@@ -184,14 +184,14 @@ class FPU(implicit p: Parameters) extends BoomModule with tile.HasFPUParameters
   val fp_ctrl = fp_decoder.io.sigs
   val fp_rm = Mux(ImmGenRm(io_req.uop.imm_packed) === 7.U, io_req.fcsr_rm, ImmGenRm(io_req.uop.imm_packed))
 
-  def fuInput(minT: Option[tile.FType]): tile.FPInput = {
+  def fuInput: tile.FPInput = {
     val req = Wire(new tile.FPInput)
     val tag = fp_ctrl.typeTagIn
     req.viewAsSupertype(new tile.FPUCtrlSigs) := fp_ctrl
     req.rm := fp_rm
-    req.in1 := unbox(io_req.rs1_data, tag, minT)
-    req.in2 := unbox(io_req.rs2_data, tag, minT)
-    req.in3 := unbox(io_req.rs3_data, tag, minT)
+    req.in1 := unbox(io_req.rs1_data, tag)
+    req.in2 := unbox(io_req.rs2_data, tag)
+    req.in3 := unbox(io_req.rs3_data, tag)
     when (fp_ctrl.swap23) { req.in3 := req.in2 }
     req.typ := ImmGenTyp(io_req.uop.imm_packed)
     req.fmt := Mux(tag === S, 0.U, 1.U) // TODO support Zfh and avoid special-case below
@@ -207,15 +207,15 @@ class FPU(implicit p: Parameters) extends BoomModule with tile.HasFPUParameters
 
   val dfma = Module(new tile.FPUFMAPipe(latency = fpu_latency, t = tile.FType.D))
   dfma.io.in.valid := io.req.valid && fp_ctrl.fma && (fp_ctrl.typeTagOut === D)
-  dfma.io.in.bits := fuInput(Some(dfma.t))
+  dfma.io.in.bits := fuInput
 
   val sfma = Module(new tile.FPUFMAPipe(latency = fpu_latency, t = tile.FType.S))
   sfma.io.in.valid := io.req.valid && fp_ctrl.fma && (fp_ctrl.typeTagOut === S)
-  sfma.io.in.bits := fuInput(Some(sfma.t))
+  sfma.io.in.bits := fuInput
 
   val fpiu = Module(new tile.FPToInt)
   fpiu.io.in.valid := io.req.valid && (fp_ctrl.toint || (fp_ctrl.fastpipe && fp_ctrl.wflags))
-  fpiu.io.in.bits := fuInput(None)
+  fpiu.io.in.bits := fuInput
   val fpiu_out = Pipe(RegNext(fpiu.io.in.valid && !fp_ctrl.fastpipe),
                               fpiu.io.out.bits, fpu_latency-1)
   val fpiu_result  = Wire(new tile.FPResult)

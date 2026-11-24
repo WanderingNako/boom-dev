@@ -219,7 +219,7 @@ class ALUExeUnit(
     numBypassStages  =
       if (hasAlu && hasMul) 3 //TODO XXX p(tile.TileKey).core.imulLatency
       else if (hasAlu) 1 else 0,
-    dataWidth        = 64 + 1,
+    dataWidth        = 64,
     bypassable       = hasAlu,
     alwaysBypassable = hasAlu && !(hasMem || hasJmpUnit || hasMul || hasDiv || hasCSR || hasIfpu || hasRocc),
     hasCSR           = hasCSR,
@@ -446,7 +446,7 @@ class FPUExeUnit(
     writesLlIrf = hasFpiu,
     writesIrf = false,
     numBypassStages = 0,
-    dataWidth = p(tile.TileKey).core.fpu.get.fLen + 1,
+    dataWidth = p(tile.TileKey).core.fpu.get.fLen,
     bypassable = false,
     hasFpu  = hasFpu,
     hasFdiv = hasFdiv,
@@ -552,7 +552,7 @@ class FPUExeUnit(
       entries = 3)) // Lets us backpressure floating point store data
     fp_sdq.io.enq.valid      := io.req.valid && io.req.bits.uop.uopc === uopSTA && !IsKilledByBranch(io.brupdate, io.req.bits.uop)
     fp_sdq.io.enq.bits.uop   := io.req.bits.uop
-    fp_sdq.io.enq.bits.data  := ieee(io.req.bits.rs2_data)
+    fp_sdq.io.enq.bits.data  := io.req.bits.rs2_data
     fp_sdq.io.enq.bits.predicated := false.B
     fp_sdq.io.enq.bits.fflags := DontCare
     fp_sdq.io.brupdate         := io.brupdate

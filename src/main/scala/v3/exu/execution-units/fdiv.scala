@@ -66,8 +66,7 @@ class UOPCodeFDivDecoder(implicit p: Parameters) extends BoomModule
 }
 
 /**
- * fdiv/fsqrt is douple-precision. Must upconvert inputs and downconvert outputs
- * as necessary.  Must wait till killed uop finishes before we're ready again.
+ * Wait for a killed operation to finish before starting the next one.
  * fdiv/fsqrt unit uses an unstable FIFO interface, and thus we must spend a
  * cycle buffering up an uop to provide slack between the issue queue and the
  * fdiv/fsqrt unit.  FDivUnit inherents directly from FunctionalUnit, because
@@ -86,16 +85,16 @@ class FDivSqrtUnit(implicit p: Parameters)
     isPipelined = false,
     numStages = 1,
     numBypassStages = 0,
-    dataWidth = 65,
+    dataWidth = 64,
     needsFcsr = true)
   with tile.HasFPUParameters
 {
   //--------------------------------------
-  // buffer inputs and upconvert as needed
+  // buffer inputs
 
   // provide a one-entry queue to store incoming uops while waiting for the fdiv/fsqrt unit to become available.
   val r_buffer_val = RegInit(false.B)
-  val r_buffer_req = Reg(new FuncUnitReq(dataWidth=65))
+  val r_buffer_req = Reg(new FuncUnitReq(dataWidth=64))
   val r_buffer_fin = Reg(new tile.FPInput)
 
   val fdiv_decoder = Module(new UOPCodeFDivDecoder)
@@ -105,18 +104,8 @@ class FDivSqrtUnit(implicit p: Parameters)
   r_buffer_val := !IsKilledByBranch(io.brupdate, r_buffer_req.uop) && !io.req.bits.kill && r_buffer_val
   r_buffer_req.uop.br_mask := GetNewBrMask(io.brupdate, r_buffer_req.uop)
 
-  // handle incoming uop, including upconversion as needed, and push back if our input queue is already occupied
+  // handle incoming uop, and push back if our input queue is already occupied
   io.req.ready := !r_buffer_val
-
-  def upconvert(x: UInt) = {
-    val s2d = Module(new hardfloat.RecFNToRecFN(inExpWidth = 8, inSigWidth = 24, outExpWidth = 11, outSigWidth = 53))
-    s2d.io.in := x
-    s2d.io.roundingMode := 0.U
-    s2d.io.detectTininess := DontCare
-    s2d.io.out
-  }
-  val in1_upconvert = upconvert(unbox(io.req.bits.rs1_data, false.B, Some(tile.FType.S)))
-  val in2_upconvert = upconvert(unbox(io.req.bits.rs2_data, false.B, Some(tile.FType.S)))
 
   when (io.req.valid && !IsKilledByBranch(io.brupdate, io.req.bits.uop) && !io.req.bits.kill) {
     r_buffer_val := true.B
@@ -127,12 +116,8 @@ class FDivSqrtUnit(implicit p: Parameters)
     r_buffer_fin.rm := Mux(ImmGenRm(io.req.bits.uop.imm_packed) === 7.U, io.fcsr_rm, ImmGenRm(io.req.bits.uop.imm_packed))
     r_buffer_fin.typ := 0.U // unused for fdivsqrt
     val tag = fdiv_decoder.io.sigs.typeTagIn
-    r_buffer_fin.in1 := unbox(io.req.bits.rs1_data, tag, Some(tile.FType.D))
-    r_buffer_fin.in2 := unbox(io.req.bits.rs2_data, tag, Some(tile.FType.D))
-    when (tag === S) {
-      r_buffer_fin.in1 := in1_upconvert
-      r_buffer_fin.in2 := in2_upconvert
-    }
+    r_buffer_fin.in1 := unbox(io.req.bits.rs1_data, tag)
+    r_buffer_fin.in2 := unbox(io.req.bits.rs2_data, tag)
   }
 
   assert (!(r_buffer_val && io.req.valid), "[fdiv] a request is incoming while the buffer is already full.")
@@ -140,11 +125,12 @@ class FDivSqrtUnit(implicit p: Parameters)
   //-----------
   // fdiv/fsqrt
 
-  val divsqrt = Module(new hardfloat.DivSqrtRecF64)
+  val divsqrt = Module(new hardfloat.DivSqrtF64)
+  val divsqrt_s = Module(new hardfloat.DivSqrtFN_small(8, 24, 0))
+  val single = r_buffer_fin.typeTagIn === S
 
   val r_divsqrt_val = RegInit(false.B)  // inflight uop?
   val r_divsqrt_killed = Reg(Bool())           // has inflight uop been killed?
-  val r_divsqrt_fin = Reg(new tile.FPInput)
   val r_divsqrt_uop = Reg(new MicroOp)
 
   // Need to buffer output until RF writeport is available.
@@ -156,13 +142,23 @@ class FDivSqrtUnit(implicit p: Parameters)
     !r_divsqrt_val &&
     output_buffer_available
 
-  val divsqrt_ready = Mux(divsqrt.io.sqrtOp, divsqrt.io.inReady_sqrt, divsqrt.io.inReady_div)
-  divsqrt.io.inValid := may_fire_input // must be setup early
+  val divsqrt_ready = Mux(single, divsqrt_s.io.inReady,
+    Mux(divsqrt.io.sqrtOp, divsqrt.io.inReady_sqrt, divsqrt.io.inReady_div))
+  divsqrt.io.inValid := may_fire_input && !single
   divsqrt.io.sqrtOp := r_buffer_fin.sqrt
   divsqrt.io.a := r_buffer_fin.in1
   divsqrt.io.b := Mux(divsqrt.io.sqrtOp, r_buffer_fin.in1, r_buffer_fin.in2)
   divsqrt.io.roundingMode := r_buffer_fin.rm
-  divsqrt.io.detectTininess := DontCare
+  divsqrt.io.detectTininess := hardfloat.consts.tininess_afterRounding
+  divsqrt_s.io.inValid := may_fire_input && single
+  divsqrt_s.io.sqrtOp := r_buffer_fin.sqrt
+  divsqrt_s.io.a := r_buffer_fin.in1(31, 0)
+  divsqrt_s.io.b := r_buffer_fin.in2(31, 0)
+  divsqrt_s.io.roundingMode := r_buffer_fin.rm
+  divsqrt_s.io.detectTininess := hardfloat.consts.tininess_afterRounding
+
+  val single_valid = divsqrt_s.io.outValid_div || divsqrt_s.io.outValid_sqrt
+  val result_valid = single_valid || divsqrt.io.outValid_div || divsqrt.io.outValid_sqrt
 
   r_divsqrt_killed := r_divsqrt_killed || IsKilledByBranch(io.brupdate, r_divsqrt_uop) || io.req.bits.kill
   r_divsqrt_uop.br_mask := GetNewBrMask(io.brupdate, r_divsqrt_uop)
@@ -172,19 +168,18 @@ class FDivSqrtUnit(implicit p: Parameters)
     // We don't have time to kill divsqrt request so must track if killed on entry.
     r_buffer_val := false.B
     r_divsqrt_val := true.B
-    r_divsqrt_fin := r_buffer_fin
     r_divsqrt_uop := r_buffer_req.uop
     r_divsqrt_killed := IsKilledByBranch(io.brupdate, r_buffer_req.uop) || io.req.bits.kill
     r_divsqrt_uop.br_mask := GetNewBrMask(io.brupdate, r_buffer_req.uop)
   }
 
   //-----------------------------------------
-  // buffer output and down-convert as needed
+  // buffer output
 
   val r_out_val = RegInit(false.B)
   val r_out_uop = Reg(new MicroOp)
-  val r_out_flags_double = Reg(Bits())
-  val r_out_wdata_double = Reg(Bits())
+  val r_out_flags = Reg(Bits())
+  val r_out_wdata = Reg(Bits())
 
   output_buffer_available := !r_out_val
 
@@ -193,36 +188,26 @@ class FDivSqrtUnit(implicit p: Parameters)
   when (io.resp.ready || IsKilledByBranch(io.brupdate, r_out_uop) || io.req.bits.kill) {
     r_out_val := false.B
   }
-  when (divsqrt.io.outValid_div || divsqrt.io.outValid_sqrt) {
+  when (result_valid) {
     r_divsqrt_val := false.B
 
     r_out_val := !r_divsqrt_killed && !IsKilledByBranch(io.brupdate, r_divsqrt_uop) && !io.req.bits.kill
     r_out_uop := r_divsqrt_uop
     r_out_uop.br_mask := GetNewBrMask(io.brupdate, r_divsqrt_uop)
-    r_out_wdata_double := sanitizeNaN(divsqrt.io.out, tile.FType.D)
-    r_out_flags_double := divsqrt.io.exceptionFlags
+    r_out_wdata := Mux(single_valid, box(divsqrt_s.io.out, tile.FType.S), divsqrt.io.out)
+    r_out_flags := Mux(single_valid, divsqrt_s.io.exceptionFlags, divsqrt.io.exceptionFlags)
 
     assert (r_divsqrt_val, "[fdiv] a response is being generated for no request.")
   }
 
-  assert (!(r_out_val && (divsqrt.io.outValid_div || divsqrt.io.outValid_sqrt)),
+  assert (!(r_out_val && result_valid),
     "[fdiv] Buffered output being overwritten by another output from the fdiv/fsqrt unit.")
-
-  val downvert_d2s = Module(new hardfloat.RecFNToRecFN(
-    inExpWidth = 11, inSigWidth = 53, outExpWidth = 8, outSigWidth = 24))
-  downvert_d2s.io.in := r_out_wdata_double
-  downvert_d2s.io.roundingMode := r_divsqrt_fin.rm
-  downvert_d2s.io.detectTininess := DontCare
-  val out_flags = r_out_flags_double | Mux(r_divsqrt_fin.typeTagIn === S, downvert_d2s.io.exceptionFlags, 0.U)
 
   io.resp.valid := r_out_val && !IsKilledByBranch(io.brupdate, r_out_uop)
   io.resp.bits.uop := r_out_uop
-  io.resp.bits.data :=
-    Mux(r_divsqrt_fin.typeTagIn === S,
-      box(downvert_d2s.io.out, false.B),
-      box(r_out_wdata_double, true.B))
+  io.resp.bits.data := r_out_wdata
   io.resp.bits.fflags.valid := io.resp.valid
   io.resp.bits.fflags.bits.uop := r_out_uop
   io.resp.bits.fflags.bits.uop.br_mask := GetNewBrMask(io.brupdate, r_out_uop)
-  io.resp.bits.fflags.bits.flags := out_flags
+  io.resp.bits.fflags.bits.flags := r_out_flags
 }

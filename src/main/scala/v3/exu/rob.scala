@@ -65,7 +65,7 @@ class RobIo(
   // Write-back Stage
   // (Update of ROB)
   // Instruction is no longer busy and can be committed
-  val wb_resps = Flipped(Vec(numWakeupPorts, Valid(new ExeUnitResp(xLen max fLen+1))))
+  val wb_resps = Flipped(Vec(numWakeupPorts, Valid(new ExeUnitResp(xLen max fLen))))
 
   // Unbusying ports for stores.
   // +1 for fpstdata

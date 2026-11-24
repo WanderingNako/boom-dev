@@ -85,9 +85,8 @@ abstract class RegisterFile(
   })
 
   private val rf_cost = (numReadPorts + numWritePorts) * (numReadPorts + 2*numWritePorts)
-  private val type_str = if (registerWidth == fLen+1) "Floating Point" else "Integer"
   override def toString: String = BoomCoreStringPrefix(
-    "==" + type_str + " Regfile==",
+    "==Regfile==",
     "Num RF Read Ports     : " + numReadPorts,
     "Num RF Write Ports    : " + numWritePorts,
     "RF Cost (R+W)*(R+2W)  : " + rf_cost,

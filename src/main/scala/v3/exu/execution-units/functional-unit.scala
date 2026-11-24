@@ -477,14 +477,13 @@ class ALUUnit(isJmpUnit: Boolean = false, numStages: Int = 1, dataWidth: Int)(im
 /**
  * Functional unit that passes in base+imm to calculate addresses, and passes store data
  * to the LSU.
- * For floating point, 65bit FP store-data needs to be decoded into 64bit FP form
  */
 class MemAddrCalcUnit(implicit p: Parameters)
   extends PipelinedFunctionalUnit(
     numStages = 0,
     numBypassStages = 0,
     earliestBypassStage = 0,
-    dataWidth = 65, // TODO enable this only if FP is enabled?
+    dataWidth = 64,
     isMemAddrCalcUnit = true)
   with freechips.rocketchip.rocket.constants.MemoryOpConstants
   with freechips.rocketchip.rocket.constants.ScalarOpConstants
@@ -500,13 +499,8 @@ class MemAddrCalcUnit(implicit p: Parameters)
   io.resp.bits.addr := effective_address
   io.resp.bits.data := store_data
 
-  if (dataWidth > 63) {
-    assert (!(io.req.valid && io.req.bits.uop.ctrl.is_std &&
-      io.resp.bits.data(64).asBool === true.B), "65th bit set in MemAddrCalcUnit.")
-
-    assert (!(io.req.valid && io.req.bits.uop.ctrl.is_std && io.req.bits.uop.fp_val),
-      "FP store-data should now be going through a different unit.")
-  }
+  assert (!(io.req.valid && io.req.bits.uop.ctrl.is_std && io.req.bits.uop.fp_val),
+    "FP store-data should go through the FP execution unit.")
 
   assert (!(io.req.bits.uop.fp_val && io.req.valid && io.req.bits.uop.uopc =/=
           uopLD && io.req.bits.uop.uopc =/= uopSTA),
@@ -566,7 +560,7 @@ class FPUUnit(implicit p: Parameters)
     numStages = p(tile.TileKey).core.fpu.get.dfmaLatency,
     numBypassStages = 0,
     earliestBypassStage = 0,
-    dataWidth = 65,
+    dataWidth = 64,
     needsFcsr = true)
 {
   val fpu = Module(new FPU())
@@ -593,7 +587,7 @@ class IntToFPUnit(latency: Int)(implicit p: Parameters)
     numStages = latency,
     numBypassStages = 0,
     earliestBypassStage = 0,
-    dataWidth = 65,
+    dataWidth = 64,
     needsFcsr = true)
   with tile.HasFPUParameters
 {
@@ -602,21 +596,13 @@ class IntToFPUnit(latency: Int)(implicit p: Parameters)
   fp_decoder.io.uopc := io_req.uop.uopc
   val fp_ctrl = fp_decoder.io.sigs
   val fp_rm = Mux(ImmGenRm(io_req.uop.imm_packed) === 7.U, io.fcsr_rm, ImmGenRm(io_req.uop.imm_packed))
-  val req = Wire(new tile.FPInput)
-  val tag = fp_ctrl.typeTagIn
+  val req = Wire(new tile.IntToFPInput)
 
   req.viewAsSupertype(new tile.FPUCtrlSigs) := fp_ctrl
 
   req.rm := fp_rm
-  req.in1 := unbox(io_req.rs1_data, tag, None)
-  req.in2 := unbox(io_req.rs2_data, tag, None)
-  req.in3 := DontCare
+  req.in1 := io_req.rs1_data
   req.typ := ImmGenTyp(io_req.uop.imm_packed)
-  req.fmt := DontCare // FIXME: this may not be the right thing to do here
-  req.fmaCmd := DontCare
-
-  assert (!(io.req.valid && fp_ctrl.fromint && req.in1(xLen).asBool),
-    "[func] IntToFP integer input has 65th high-order bit set!")
 
   assert (!(io.req.valid && !fp_ctrl.fromint),
     "[func] Only support fromInt micro-ops.")
@@ -624,11 +610,9 @@ class IntToFPUnit(latency: Int)(implicit p: Parameters)
   val ifpu = Module(new tile.IntToFP(intToFpLatency))
   ifpu.io.in.valid := io.req.valid
   ifpu.io.in.bits := req
-  ifpu.io.in.bits.in1 := io_req.rs1_data
-  val out_double = Pipe(io.req.valid, fp_ctrl.typeTagOut === D, intToFpLatency).bits
+  val out_tag = Pipe(io.req.valid, fp_ctrl.typeTagIn, intToFpLatency).bits
 
-//io.resp.bits.data              := box(ifpu.io.out.bits.data, !io.resp.bits.uop.fp_single)
-  io.resp.bits.data              := box(ifpu.io.out.bits.data, out_double)
+  io.resp.bits.data              := box(ifpu.io.out.bits.data, out_tag)
   io.resp.bits.fflags.valid      := ifpu.io.out.valid
   io.resp.bits.fflags.bits.uop   := io.resp.bits.uop
   io.resp.bits.fflags.bits.flags := ifpu.io.out.bits.exc
